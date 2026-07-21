@@ -151,7 +151,7 @@ pub fn transform(
 
                 // √size_of_head
                 let x6 = TypedTensor::<f32>::from_vec_col_major(
-                    vec![1, 1],
+                    vec![],
                     vec![(size_of_head as f32).sqrt()],
                 )?;
 
@@ -266,16 +266,16 @@ pub fn transform(
         // https://arxiv.org/pdf/1606.08415
 
         // 0.044715
-        let x20 = TypedTensor::<f32>::from_vec_col_major(vec![1, 1], vec![0.044715])?;
+        let x20 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![0.044715])?;
 
         // √(2 / π)
-        let x21 = TypedTensor::<f32>::from_vec_col_major(vec![1, 1], vec![(2.0 / PI).sqrt()])?;
+        let x21 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![(2.0 / PI).sqrt()])?;
 
         // 1
-        let x22 = TypedTensor::<f32>::from_vec_col_major(vec![1, 1], vec![1.0])?;
+        let x22 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![1.0])?;
 
         // 0.5
-        let x23 = TypedTensor::<f32>::from_vec_col_major(vec![1, 1], vec![0.5])?;
+        let x23 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![0.5])?;
 
         // GELU(x19) = (tanh((x19³ * 0.044715 + x19) * √(2 / π)) + 1) * x19 * 0.5
         let x24 = x19
@@ -344,7 +344,7 @@ fn layer_norm(
     backend: &mut tenferro_cpu::CpuBackend,
 ) -> Result<TypedTensor<f32>, Box<dyn Error>> {
     // N(tensor)
-    let x0 = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![tensor.shape()[1] as f32])?;
+    let x0 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![tensor.shape()[1] as f32])?;
 
     // ⟨tensor⟩ = ∑ tensor / N(tensor)
     let x1 = tensor
@@ -369,7 +369,7 @@ fn layer_norm(
     // https://docs.pytorch.org/docs/2.13/generated/torch.nn.LayerNorm.html
 
     // ε = 1.0e-5
-    let x4 = TypedTensor::<f32>::from_vec_col_major(vec![1, 1], vec![1.0e-5])?;
+    let x4 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![1.0e-5])?;
 
     // √(var(tensor) + ε)
     let x5 = x3.add(&x4, backend)?.sqrt(backend)?;
