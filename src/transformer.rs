@@ -158,11 +158,11 @@ pub fn transform(
                 // q @ kᵀ / √size_of_head
                 let x7 = q.matmul(&x5, backend)?.div(&x6, backend)?;
 
-                //      ⎛ a₁₁ a₁₂ a₁₃ ……… a₁ₙ ⎞        ⎛ a₁₁  −∞  −∞ ………  −∞ ⎞
-                //      ⎜ a₂₁ a₂₂ a₂₃ ……… a₂ₙ ⎟        ⎜ a₂₁ a₂₂  −∞ ………  −∞ ⎟
-                // x7 = ⎜ a₃₁ a₃₂ a₃₃ ……… a₃ₙ ⎟ → x8 = ⎜ a₃₁ a₃₂ a₃₃ ………  −∞ ⎟
-                //      ⎜ ……… ……… ……… ……… ……… ⎟        ⎜ ……… ……… ……… ……… ……… ⎟
-                //      ⎝ aₙ₁ aₙ₂ aₙ₃ ……… aₙₙ ⎠        ⎝ aₙ₁ aₙ₂ aₙ₃ ……… aₙₙ ⎠
+                //      ⎛ a₁₁ a₁₂ a₁₃  ⋯  a₁ₙ ⎞        ⎛ a₁₁ −∞  −∞   ⋯  −∞  ⎞
+                //      ⎜ a₂₁ a₂₂ a₂₃  ⋯  a₂ₙ ⎟        ⎜ a₂₁ a₂₂ −∞   ⋯  −∞  ⎟
+                // x7 = ⎜ a₃₁ a₃₂ a₃₃  ⋯  a₃ₙ ⎟ → x8 = ⎜ a₃₁ a₃₂ a₃₃  ⋯  −∞  ⎟
+                //      ⎜  ⋮   ⋮   ⋮   ⋱   ⋮  ⎟        ⎜  ⋮   ⋮   ⋮   ⋱   ⋮  ⎟
+                //      ⎝ aₙ₁ aₙ₂ aₙ₃  ⋯  aₙₙ ⎠        ⎝ aₙ₁ aₙ₂ aₙ₃  ⋯  aₙₙ ⎠
                 let x8 = {
                     let mut colmaj = Vec::with_capacity(ids.len() * ids.len());
                     for col in 0..ids.len() {
@@ -310,6 +310,15 @@ pub fn transform(
 
     // ==== Projection ====
 
+    // x2[-1]
+    let x26 = {
+        let mut colmaj = Vec::with_capacity(config.n_embd);
+        for col in 0..config.n_embd {
+            colmaj.push(*x2.get(&[ids.len() - 1, col])?);
+        }
+        TypedTensor::<f32>::from_vec_col_major(vec![1, config.n_embd], colmaj)?
+    };
+
     let ln_f_weight = &tensors["ln_f.weight"];
     if ln_f_weight.shape() != [config.n_embd] {
         return Err("tensor has unexpected shape".into());
@@ -320,21 +329,15 @@ pub fn transform(
         return Err("tensor has unexpected shape".into());
     }
 
-    let x26 = layer_norm(&x2, ln_f_weight, ln_f_bias, backend)?;
+    let x27 = layer_norm(&x26, ln_f_weight, ln_f_bias, backend)?;
 
-    // x26[-1]ᵀ
-    let x27 = {
-        let mut colmaj = Vec::with_capacity(config.n_embd);
-        for col in 0..config.n_embd {
-            colmaj.push(*x26.get(&[ids.len() - 1, col])?);
-        }
-        TypedTensor::<f32>::from_vec_col_major(vec![config.n_embd, 1], colmaj)?
-    };
+    // x27ᵀ
+    let x28 = x27.reshape(&[config.n_embd, 1], backend)?;
 
-    // wte_weight @ x26[-1]ᵀ
-    let x28 = wte_weight.matmul(&x27, backend)?;
+    // wte_weight @ x27ᵀ
+    let x29 = wte_weight.matmul(&x28, backend)?;
 
-    Ok(x28)
+    Ok(x29)
 }
 
 fn layer_norm(
@@ -400,25 +403,23 @@ fn show(tensor: &TypedTensor<f32>) -> Result<(), Box<dyn Error>> {
         return Err("num_cols is 0".into());
     }
 
-    println!("┌{}┐", "─".repeat(39));
+    println!("┌{:─^29}┐", "");
 
     println!(
-        "│ {:15.6e} {:5} {:15.6e} │",
+        "│ {:<+12.6e} ⋯ {:<+12.6e} │",
         tensor.get(&[0, 0]).unwrap(),
-        "",
         tensor.get(&[0, num_cols - 1]).unwrap(),
     );
 
-    println!("│ {:15} {:5} {:15} {num_rows}", "", "", "");
+    println!("│ {:^12}   {:^12} {num_rows}", "⋮", "⋮");
 
     println!(
-        "│ {:15.6e} {:5} {:15.6e} │",
+        "│ {:<+12.6e} ⋯ {:<+12.6e} │",
         tensor.get(&[num_rows - 1, 0]).unwrap(),
-        "",
         tensor.get(&[num_rows - 1, num_cols - 1]).unwrap(),
     );
 
-    println!("└{} {num_cols:5} {}┘", "─".repeat(16), "─".repeat(16));
+    println!("└{num_cols:─^29}┘");
 
     Ok(())
 }
