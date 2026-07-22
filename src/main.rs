@@ -31,11 +31,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 3 {
         println!("GPT-2 Inference with tenferro");
-        println!();
         println!(
-            "Usage: cargo run --release \x1b[4m<path to model repository>\x1b[24m \x1b[4m<your prompt>\x1b[24m",
+            "Usage: \x1b[1mcargo run --release <path to model repository> <your prompt>\x1b[22m"
         );
-        println!();
         println!("You may have to enclose 'your prompt' with quotes.");
         return Ok(());
     }
@@ -115,11 +113,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         loader::load_safetensors(path)?
     };
 
-    println!();
+    // ==== Inference ====
+
     print!("\x1b[1;90m{}\x1b[22;39m", &args[2]);
     std::io::stdout().flush()?;
-
-    // ==== Inference ====
 
     let mut backend = CpuBackend::new();
     let mut utf8_buffer = Vec::new();
