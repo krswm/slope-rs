@@ -36,12 +36,12 @@ pub fn transform(
     ids: &Vec<usize>,
     backend: &mut CpuBackend,
 ) -> Result<TypedTensor<f32>, Box<dyn Error>> {
+    // ==== Embedding ====
+
     let wte_weight = &tensors["wte.weight"];
     if wte_weight.shape() != [config.vocab_size, config.n_embd] {
         return Err("tensor has unexpected shape".into());
     }
-
-    // ==== Embedding ====
 
     // wte_weight[ids]
     let x0 = {
@@ -59,7 +59,7 @@ pub fn transform(
         return Err("tensor has unexpected shape".into());
     }
 
-    // wpe_weight[range(len(ids))]
+    // wpe_weight[0:length(ids)]
     let x1 = {
         let mut colmaj = Vec::with_capacity(ids.len() * config.n_embd);
         for col in 0..config.n_embd {
@@ -70,7 +70,7 @@ pub fn transform(
         TypedTensor::<f32>::from_vec_col_major(vec![ids.len(), config.n_embd], colmaj)?
     };
 
-    // wte[ids] + wpe[range(len(ids))]
+    // wte_weight[ids] + wpe_weight[0:length(ids)]
     let mut x2 = x0.add(&x1, backend)?;
 
     for i_layer in 0..config.n_layer {
@@ -98,7 +98,7 @@ pub fn transform(
             return Err("tensor has unexpected shape".into());
         }
 
-        // x3 @ attn_c_attn_weight + attn_c_attn_bias
+        // x3 * attn_c_attn_weight .+ attn_c_attn_bias
         let x4 = x3
             .matmul(attn_c_attn_weight, backend)?
             .add(attn_c_attn_bias, backend)?;
@@ -110,7 +110,7 @@ pub fn transform(
             //                config.n_head sub-matrices
             //      ┌─────────┴─────────┐
             //      ┏━━━┯━━━┯   ┯━━━┯━━━┳━━━┯━━━┯   ┯━━━┯━━━┳━━━┯━━━┯   ┯━━━┯━━━┓ ┐
-            // x4 = ┃ q │ q │ … │ q │ q ┃ k │ k │ … │ k │ k ┃ v │ v │ … │ v │ v ┃ ├ ids.len() rows
+            // x4 = ┃ q │ q │ ⋯ │ q │ q ┃ k │ k │ ⋯ │ k │ k ┃ v │ v │ ⋯ │ v │ v ┃ ├ ids.len() rows
             //      ┗━━━┷━━━┷   ┷━━━┷━━━┻━━━┷━━━┷   ┷━━━┷━━━┻━━━┷━━━┷   ┷━━━┷━━━┛ ┘
             //      └─┬─┘
             //        size_of_head columns
@@ -146,7 +146,7 @@ pub fn transform(
                     (q, k, v)
                 };
 
-                // kᵀ
+                // transpose(k)
                 let x5 = k.transpose(&[1, 0], backend)?;
 
                 // √size_of_head
@@ -155,7 +155,7 @@ pub fn transform(
                     vec![(size_of_head as f32).sqrt()],
                 )?;
 
-                // q @ kᵀ / √size_of_head
+                // q * transpose(k) / √size_of_head
                 let x7 = q.matmul(&x5, backend)?.div(&x6, backend)?;
 
                 //      ⎛ a₁₁ a₁₂ a₁₃  ⋯  a₁ₙ ⎞        ⎛ a₁₁ −∞  −∞   ⋯  −∞  ⎞
@@ -177,7 +177,7 @@ pub fn transform(
                     TypedTensor::<f32>::from_vec_col_major(vec![ids.len(), ids.len()], colmaj)?
                 };
 
-                // max(x8)
+                // maximum(x8)
                 let x9 = {
                     let mut colmaj = Vec::with_capacity(ids.len());
                     for row in 0..ids.len() {
@@ -193,21 +193,21 @@ pub fn transform(
                     TypedTensor::<f32>::from_vec_col_major(vec![ids.len(), 1], colmaj)?
                 };
 
-                // x8 - max(x8)
+                // x8 .- maximum(x8)
                 let x10 = x8.sub(&x9, backend)?;
 
-                // exp(x8 - max(x8))
+                // exp.(x8 .- maximum(x8))
                 let x11 = x10.exp(backend)?;
 
-                // ∑ exp(x8 - max(x8)))
+                // sum(exp.(x8 .- maximum(x8))))
                 let x12 = x11
                     .reduce_sum(&[1], backend)?
                     .reshape(&[ids.len(), 1], backend)?;
 
-                // softmax(x8) = exp(x8 - max(x8)) / ∑ exp(x8 - max(x8))
+                // softmax(x8) = exp.(x8 .- maximum(x8)) ./ sum(exp.(x8 .- max(x8)))
                 let x13 = x11.div(&x12, backend)?;
 
-                // softmax(x8) @ v
+                // attention = softmax(x8) * v
                 let x14 = x13.matmul(&v, backend)?;
 
                 stacked_colmaj.extend(x14.as_slice()?);
@@ -225,7 +225,7 @@ pub fn transform(
             return Err("tensor has unexpected shape".into());
         }
 
-        // x15 @ attn_c_proj_weight + attn_c_proj_bias
+        // x15 * attn_c_proj_weight .+ attn_c_proj_bias
         let x16 = x15
             .matmul(attn_c_proj_weight, backend)?
             .add(attn_c_proj_bias, backend)?;
@@ -257,27 +257,27 @@ pub fn transform(
             return Err("tensor has unexpected shape".into());
         }
 
-        // x18 @ mlp_c_fc_weight + mlp_c_fc_bias
+        // x18 * mlp_c_fc_weight .+ mlp_c_fc_bias
         let x19 = x18
             .matmul(mlp_c_fc_weight, backend)?
             .add(mlp_c_fc_bias, backend)?;
 
-        // The formula for GELU is according to the original paper of GELU.
+        // The formula is according to the original paper of GELU.
         // https://arxiv.org/pdf/1606.08415
 
         // 0.044715
         let x20 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![0.044715])?;
 
-        // √(2 / π)
+        // √(2.0 / π)
         let x21 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![(2.0 / PI).sqrt()])?;
 
-        // 1
+        // 1.0
         let x22 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![1.0])?;
 
         // 0.5
         let x23 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![0.5])?;
 
-        // GELU(x19) = (tanh((x19³ * 0.044715 + x19) * √(2 / π)) + 1) * x19 * 0.5
+        // GELU(x19) = (tanh.((x19 .^ 3 * 0.044715 + x19) * √(2.0 / π)) .+ 1.0) .* x19 * 0.5
         let x24 = x19
             .mul(&x19, backend)?
             .mul(&x19, backend)?
@@ -299,7 +299,7 @@ pub fn transform(
             return Err("tensor has unexpected shape".into());
         }
 
-        // x24 @ mlp_c_proj_weight + mlp_c_proj_bias
+        // x24 * mlp_c_proj_weight .+ mlp_c_proj_bias
         let x25 = x24
             .matmul(mlp_c_proj_weight, backend)?
             .add(mlp_c_proj_bias, backend)?;
@@ -310,7 +310,7 @@ pub fn transform(
 
     // ==== Projection ====
 
-    // x2[-1]
+    // x2[end]
     let x26 = {
         let mut colmaj = Vec::with_capacity(config.n_embd);
         for col in 0..config.n_embd {
@@ -331,10 +331,10 @@ pub fn transform(
 
     let x27 = layer_norm(&x26, ln_f_weight, ln_f_bias, backend)?;
 
-    // x27ᵀ
+    // transpose(x2)
     let x28 = x27.reshape(&[config.n_embd, 1], backend)?;
 
-    // wte_weight @ x27ᵀ
+    // wte_weight * transpose(x2)
     let x29 = wte_weight.matmul(&x28, backend)?;
 
     Ok(x29)
@@ -346,22 +346,22 @@ fn layer_norm(
     bias: &TypedTensor<f32>,
     backend: &mut tenferro_cpu::CpuBackend,
 ) -> Result<TypedTensor<f32>, Box<dyn Error>> {
-    // N(tensor)
+    // length(tensor)
     let x0 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![tensor.shape()[1] as f32])?;
 
-    // ⟨tensor⟩ = ∑ tensor / N(tensor)
+    // mean(tensor) = sum(tensor / length(tensor))
     let x1 = tensor
         .reduce_sum(&[1], backend)?
         .reshape(&[tensor.shape()[0], 1], backend)?
         .div(&x0, backend)?;
 
-    // tensor - ⟨tensor⟩
+    // tensor .- mean(tensor)
     let x2 = tensor.sub(&x1, backend)?;
 
-    // The original paper of linear normalization uses N(tensor) for denominator of variance.
+    // The original paper of linear normalization uses length(tensor) for denominator of variance.
     // https://arxiv.org/pdf/1607.06450
 
-    // var(tensor) = ∑ (tensor - ⟨tensor⟩)² / N(tensor)
+    // var(tensor) = sum((tensor .- mean(tensor) .^ 2) / length(tensor)
     let x3 = x2
         .mul(&x2, backend)?
         .reduce_sum(&[1], backend)?
@@ -374,10 +374,10 @@ fn layer_norm(
     // ε = 1.0e-5
     let x4 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![1.0e-5])?;
 
-    // √(var(tensor) + ε)
+    // .√(var(tensor) + ε)
     let x5 = x3.add(&x4, backend)?.sqrt(backend)?;
 
-    // (tensor - ⟨tensor⟩) / √(var(tensor) + ε) * weight + bias
+    // (tensor .- mean(tensor)) ./ .√(var(tensor) + ε) .* weight .+ bias
     let x6 = x2
         .div(&x5, backend)?
         .mul(weight, backend)?
