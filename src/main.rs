@@ -49,6 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let conf: HashMap<String, Value> = serde_json::from_reader(reader)?;
         transformer::Config {
+            layer_norm_epsilon: conf["layer_norm_epsilon"].as_f64().unwrap() as f32,
             n_ctx: conf["n_ctx"].as_u64().unwrap() as usize,
             n_embd: conf["n_embd"].as_u64().unwrap() as usize,
             n_head: conf["n_head"].as_u64().unwrap() as usize,

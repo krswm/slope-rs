@@ -22,6 +22,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
 
 pub struct Config {
+    pub layer_norm_epsilon: f32,
     pub n_ctx: usize,
     pub n_embd: usize,
     pub n_head: usize,
@@ -86,7 +87,7 @@ pub fn transform(
             return Err("tensor has unexpected shape".into());
         }
 
-        let x3 = layer_norm(&x2, ln_1_weight, ln_1_bias, backend)?;
+        let x3 = layer_norm(&x2, ln_1_weight, ln_1_bias, config, backend)?;
 
         let attn_c_attn_weight = &tensors[&format!("h.{i_layer}.attn.c_attn.weight")];
         if attn_c_attn_weight.shape() != [config.n_embd, 3 * config.n_embd] {
@@ -245,7 +246,7 @@ pub fn transform(
             return Err("tensor has unexpected shape".into());
         }
 
-        let x18 = layer_norm(&x17, ln_2_weight, ln_2_bias, backend)?;
+        let x18 = layer_norm(&x17, ln_2_weight, ln_2_bias, config, backend)?;
 
         let mlp_c_fc_weight = &tensors[&format!("h.{i_layer}.mlp.c_fc.weight")];
         if mlp_c_fc_weight.shape() != [config.n_embd, 4 * config.n_embd] {
@@ -329,7 +330,7 @@ pub fn transform(
         return Err("tensor has unexpected shape".into());
     }
 
-    let x27 = layer_norm(&x26, ln_f_weight, ln_f_bias, backend)?;
+    let x27 = layer_norm(&x26, ln_f_weight, ln_f_bias, config, backend)?;
 
     // transpose(x2)
     let x28 = x27.reshape(&[config.n_embd, 1], backend)?;
@@ -344,12 +345,13 @@ fn layer_norm(
     tensor: &TypedTensor<f32>,
     weight: &TypedTensor<f32>,
     bias: &TypedTensor<f32>,
+    config: &Config,
     backend: &mut tenferro_cpu::CpuBackend,
 ) -> Result<TypedTensor<f32>, Box<dyn Error>> {
-    // length(tensor)
-    let x0 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![tensor.shape()[1] as f32])?;
+    // n_embd
+    let x0 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![config.n_embd as f32])?;
 
-    // mean(tensor) = sum(tensor / length(tensor))
+    // mean(tensor) = sum(tensor / n_embd)
     let x1 = tensor
         .reduce_sum(&[1], backend)?
         .reshape(&[tensor.shape()[0], 1], backend)?
@@ -358,26 +360,24 @@ fn layer_norm(
     // tensor .- mean(tensor)
     let x2 = tensor.sub(&x1, backend)?;
 
-    // The original paper of linear normalization uses length(tensor) for denominator of variance.
+    // The original paper of linear normalization uses
+    // H (n_embd) instead of H - 1 (n_embd - 1) for the denominator of variance.
     // https://arxiv.org/pdf/1607.06450
 
-    // var(tensor) = sum((tensor .- mean(tensor) .^ 2) / length(tensor)
+    // var(tensor) = sum((tensor .- mean(tensor) .^ 2) / n_embd
     let x3 = x2
         .mul(&x2, backend)?
         .reduce_sum(&[1], backend)?
         .reshape(&[tensor.shape()[0], 1], backend)?
         .div(&x0, backend)?;
 
-    // PyTorch uses ε = 1.0e-5.
-    // https://docs.pytorch.org/docs/2.13/generated/torch.nn.LayerNorm.html
+    // layer_norm_epsilon
+    let x4 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![config.layer_norm_epsilon])?;
 
-    // ε = 1.0e-5
-    let x4 = TypedTensor::<f32>::from_vec_col_major(vec![], vec![1.0e-5])?;
-
-    // .√(var(tensor) + ε)
+    // .√(var(tensor) + layer_norm_epsilon)
     let x5 = x3.add(&x4, backend)?.sqrt(backend)?;
 
-    // (tensor .- mean(tensor)) ./ .√(var(tensor) + ε) .* weight .+ bias
+    // (tensor .- mean(tensor)) ./ .√(var(tensor) + layer_norm_epsilon) .* weight .+ bias
     let x6 = x2
         .div(&x5, backend)?
         .mul(weight, backend)?
