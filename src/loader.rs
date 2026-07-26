@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use std::iter::zip;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -27,7 +28,7 @@ use tenferro_runtime::TypedTensor;
 struct Info {
     dtype: String,
     shape: Vec<usize>,
-    data_offsets: [usize; 2],
+    data_offsets: (usize, usize),
 }
 
 /// Load a Safetensors file and convert the tensors into `tenferro_runtime::TypedTensor<f32>`.
@@ -74,11 +75,11 @@ pub fn load_safetensors(
 
         // f32 is 4 bytes long.
         let size = 4 * info.shape.iter().product::<usize>();
-        let begin = info.data_offsets[0];
-        let end = info.data_offsets[0];
-        if 4 * size < end - begin {
+        if size < info.data_offsets.1 - info.data_offsets.0 {
             return Err("tensor data smaller than tensor shape suggests".into());
         }
+        let begin = info.data_offsets.0;
+        let end = begin + size;
 
         // ⎛a₁₁ a₁₂ a₁₃⎞
         // ⎝a₂₁ a₂₂ a₂₃⎠
@@ -89,77 +90,41 @@ pub fn load_safetensors(
         // tenferro uses column-major: a₁₁ a₂₁ a₁₂ a₂₂ a₁₃ a₂₃.
         // https://tensor4all.org/tenferro-rs/getting-started/pytorch-jax-mapping.html#column-major-storage
 
-        let rowmaj: Vec<f32> = byte_buffer[begin..begin + size]
+        let rowmaj: Vec<f32> = byte_buffer[begin..end]
             .chunks_exact(4)
             .map(|chunk| f32::from_le_bytes(*chunk.as_array::<4>().unwrap()))
             .collect();
 
-        /*
-        // My inference engine uses only 1D and 2D tensors.
-        match info.shape.len() {
-            1 => {
-                // Row-major and column-major are identical in 1D.
-                let colmaj = rowmaj;
+        let (rowmaj_factors, colmaj_factors) = {
+            let mut rowmaj_factors: Vec<usize> = Vec::with_capacity(info.shape.len());
+            let mut colmaj_factors: Vec<usize> = Vec::with_capacity(info.shape.len());
 
-                let tensor = TypedTensor::<f32>::from_vec_col_major(info.shape, colmaj)?;
-                tensors.insert(name, tensor);
+            for i in 0..info.shape.len() {
+                let rowmaj_factor = info.shape[i + 1..info.shape.len()].iter().product();
+                rowmaj_factors.push(rowmaj_factor);
+
+                let colmaj_factor = info.shape[0..i].iter().product();
+                colmaj_factors.push(colmaj_factor);
             }
-            2 => {
-                let mut colmaj = Vec::with_capacity(info.shape[0] * info.shape[1]);
 
-                for col in 0..info.shape[1] {
-                    for row in 0..info.shape[0] {
-                        colmaj.push(rowmaj[row * info.shape[1] + col]);
-                    }
-                }
-
-                let tensor = TypedTensor::<f32>::from_vec_col_major(info.shape, colmaj)?;
-                tensors.insert(name, tensor);
-            }
-            _ => (),
+            (rowmaj_factors, colmaj_factors)
         };
-        */
 
-        let mut divisors = Vec::with_capacity(info.shape.len());
-        for j in 0..info.shape.len() {
-            let mut divisor = 1usize;
-            let mut k = j + 1;
-            while k < info.shape.len() {
-                divisor *= &info.shape[k];
-                k += 1;
+        let colmaj = {
+            let capacity: usize = info.shape.iter().product();
+            let mut colmaj = Vec::with_capacity(capacity);
+            for index_for_colmaj in 0..capacity {
+                let mut index_for_rowmaj = 0usize;
+                for (size, (colmaj_factor, rowmaj_factor)) in
+                    zip(&info.shape, zip(&colmaj_factors, &rowmaj_factors))
+                {
+                    let index = index_for_colmaj / colmaj_factor % size;
+                    index_for_rowmaj += index * rowmaj_factor;
+                }
+                colmaj.push(rowmaj[index_for_rowmaj]);
             }
-            divisors.push(divisor);
-        }
-
-        let mut units = Vec::with_capacity(info.shape.len());
-        for j in 0..info.shape.len() {
-            let mut unit = 1usize;
-            let mut k = 0;
-            while k < j {
-                unit *= &info.shape[k];
-                k += 1;
-            }
-            units.push(unit);
-        }
-
-        let capacity: usize = info.shape.iter().product();
-        let mut colmaj = Vec::with_capacity(capacity);
-        for i in 0..capacity {
-            let mut indices = Vec::with_capacity(info.shape.len());
-            for (unit, size) in std::iter::zip(&units, &info.shape) {
-                let index = i / unit % size;
-                indices.push(index);
-            }
-
-            let mut l = 0usize;
-            for j in 0..info.shape.len() {
-                l += indices[j] * divisors[j];
-            }
-
-            let element = &rowmaj[l];
-
-            colmaj.push(*element);
-        }
+            colmaj
+        };
 
         let tensor = TypedTensor::<f32>::from_vec_col_major(info.shape, colmaj)?;
         tensors.insert(name, tensor);

@@ -37,23 +37,6 @@ pub fn transform(
     ids: &Vec<usize>,
     backend: &mut CpuBackend,
 ) -> Result<TypedTensor<f32>, Box<dyn Error>> {
-    /*
-    let ln_1_weight = &tensors[&format!("h.0.ln_1.weight")];
-    if ln_1_weight.shape() != [config.n_embd] {
-        return Err("tensor has unexpected shape".into());
-    }
-    // println!("{:?}", ln_1_weight);
-
-    let wte_weight = &tensors["wte.weight"];
-    if wte_weight.shape() != [config.vocab_size, config.n_embd] {
-        return Err("tensor has unexpected shape".into());
-    }
-    println!();
-    show(&wte_weight);
-
-    return Err("debug".into());
-    */
-
     // ==== Embedding ====
 
     let wte_weight = &tensors["wte.weight"];
