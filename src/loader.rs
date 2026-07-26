@@ -89,11 +89,12 @@ pub fn load_safetensors(
         // tenferro uses column-major: a₁₁ a₂₁ a₁₂ a₂₂ a₁₃ a₂₃.
         // https://tensor4all.org/tenferro-rs/getting-started/pytorch-jax-mapping.html#column-major-storage
 
-        let rowmaj = byte_buffer[begin..begin + size]
+        let rowmaj: Vec<f32> = byte_buffer[begin..begin + size]
             .chunks_exact(4)
             .map(|chunk| f32::from_le_bytes(*chunk.as_array::<4>().unwrap()))
             .collect();
 
+        /*
         // My inference engine uses only 1D and 2D tensors.
         match info.shape.len() {
             1 => {
@@ -117,6 +118,51 @@ pub fn load_safetensors(
             }
             _ => (),
         };
+        */
+
+        let mut divisors = Vec::with_capacity(info.shape.len());
+        for j in 0..info.shape.len() {
+            let mut divisor = 1usize;
+            let mut k = j + 1;
+            while k < info.shape.len() {
+                divisor *= &info.shape[k];
+                k += 1;
+            }
+            divisors.push(divisor);
+        }
+
+        let mut units = Vec::with_capacity(info.shape.len());
+        for j in 0..info.shape.len() {
+            let mut unit = 1usize;
+            let mut k = 0;
+            while k < j {
+                unit *= &info.shape[k];
+                k += 1;
+            }
+            units.push(unit);
+        }
+
+        let capacity: usize = info.shape.iter().product();
+        let mut colmaj = Vec::with_capacity(capacity);
+        for i in 0..capacity {
+            let mut indices = Vec::with_capacity(info.shape.len());
+            for (unit, size) in std::iter::zip(&units, &info.shape) {
+                let index = i / unit % size;
+                indices.push(index);
+            }
+
+            let mut l = 0usize;
+            for j in 0..info.shape.len() {
+                l += indices[j] * divisors[j];
+            }
+
+            let element = &rowmaj[l];
+
+            colmaj.push(*element);
+        }
+
+        let tensor = TypedTensor::<f32>::from_vec_col_major(info.shape, colmaj)?;
+        tensors.insert(name, tensor);
     }
 
     Ok(tensors)
